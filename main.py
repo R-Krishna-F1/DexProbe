@@ -12,6 +12,7 @@ import sys
 import os
 import argparse
 import time
+import traceback
 from pathlib import Path
 
 from colorama import init, Fore, Style
@@ -176,22 +177,26 @@ def validate_apk(path: str, verbose: bool = False) -> Path:
     return apk_path.resolve()
 
 
-# ── Scan Orchestrator (stub — filled in Phase 2+) ────────────────────────────
+# ── Scan Orchestrator ─────────────────────────────────────────────────────────
 
 def run_scan(apk_path: Path, args: argparse.Namespace) -> dict:
     """
-    Orchestrate all analysis pipelines against the validated APK.
-    Each pipeline will be imported and called here as it is built.
+    Orchestrate the APK unpack/list/extract/cleanup cycle.
+    Analysis pipelines are still placeholders until later phases.
     Returns a unified findings dict for report generation.
     """
+    from core.unpacker import cleanup, open_apk
+
+    scan_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     findings = {
         "meta": {
             "tool":      TOOL_NAME,
             "version":   TOOL_VERSION,
             "apk_path":  str(apk_path),
-            "scan_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "scan_time": scan_time,
             "skip_llm":  args.skip_llm,
             "pipeline":  args.pipeline,
+            "unpack":    {},
         },
         "manifest":   [],
         "secrets":    [],
@@ -201,21 +206,42 @@ def run_scan(apk_path: Path, args: argparse.Namespace) -> dict:
     }
 
     print(f"\n{Fore.CYAN}[APK Intel]{Style.RESET_ALL} Target: {apk_path.name}")
-    print(f"{Fore.CYAN}[APK Intel]{Style.RESET_ALL} Scan started at {findings['meta']['scan_time']}\n")
+    print(f"{Fore.CYAN}[APK Intel]{Style.RESET_ALL} Scan started at {scan_time}\n")
 
-    # ── Pipeline stubs (activated in later phases) ────────────────────────────
-    pipelines_to_run = (
-        [args.pipeline] if args.pipeline
-        else ["manifest", "secrets", "network", "dynload", "dependency"]
-    )
+    unpacked = None
+    try:
+        unpacked = open_apk(apk_path, verbose=args.verbose)
+        findings["meta"]["unpack"] = {
+            "package":        unpacked.metadata.get("package"),
+            "version_name":   unpacked.metadata.get("version_name"),
+            "version_code":   unpacked.metadata.get("version_code"),
+            "min_sdk":        unpacked.metadata.get("min_sdk"),
+            "target_sdk":     unpacked.metadata.get("target_sdk"),
+            "max_sdk":        unpacked.metadata.get("max_sdk"),
+            "file_count":     len(unpacked.files),
+            "dex_count":      len(unpacked.dex_files),
+            "resource_count": len(unpacked.res_files),
+        }
 
-    for pipeline in pipelines_to_run:
-        print(f"{Fore.YELLOW}[--]{Style.RESET_ALL} Pipeline '{pipeline}' — coming in a future phase.")
+        # ── Pipeline stubs (activated in later phases) ────────────────────────
+        pipelines_to_run = (
+            [args.pipeline] if args.pipeline
+            else ["manifest", "secrets", "network", "dynload", "dependency"]
+        )
 
-    print(
-        f"\n{Fore.GREEN}[APK Intel]{Style.RESET_ALL} "
-        "Phase 0 complete. Project scaffold is ready.\n"
-    )
+        for pipeline in pipelines_to_run:
+            print(
+                f"{Fore.YELLOW}[--]{Style.RESET_ALL} "
+                f"Pipeline '{pipeline}' — coming in a future phase."
+            )
+
+        print(
+            f"\n{Fore.GREEN}[APK Intel]{Style.RESET_ALL} "
+            "Unpack/list/extract cycle complete. Pipeline scaffold is ready.\n"
+        )
+    finally:
+        if unpacked is not None:
+            cleanup(unpacked)
 
     return findings
 
@@ -235,7 +261,16 @@ def main():
     apk_path = validate_apk(args.apk_file, verbose=args.verbose)
 
     # Run the scan
-    run_scan(apk_path, args)
+    try:
+        run_scan(apk_path, args)
+    except KeyboardInterrupt:
+        print(f"\n{Fore.RED}[ERROR]{Style.RESET_ALL} Scan interrupted by user.")
+        sys.exit(130)
+    except Exception as exc:
+        print(f"{Fore.RED}[ERROR]{Style.RESET_ALL} Scan failed: {exc}")
+        if args.verbose:
+            traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
